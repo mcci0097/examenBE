@@ -25,7 +25,8 @@ namespace templateExamen
                 {
                     var context = services.GetRequiredService<UsersDbContext>();
                     UsersDbSeeder.Initialize(context);
-                    UserRoleDbSeeder.Initialize(context);
+                    UserRolesDbSeeder.Initialize(context);
+                    HistoryUserRolesDbSeeder.Initialize(context);
                 }
                 catch (Exception ex)
                 {

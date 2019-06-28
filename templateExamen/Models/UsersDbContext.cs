@@ -2,6 +2,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace templateExamen.Models
@@ -11,7 +13,7 @@ namespace templateExamen.Models
         public UsersDbContext(DbContextOptions<UsersDbContext> options) : base(options)
         {
         }
-
+      
         protected override void OnModelCreating(ModelBuilder builder)
         {
             builder.Entity<User>(entity =>

@@ -16,7 +16,6 @@ namespace templateExamen.ViewModels
         public string Email { get; set; }
         public string Password { get; set; }
         public string UserRole { get; set; }
-        //  public string UserRole { get; set; }
         public DateTime DateRegister { get; set; }
 
 
@@ -42,17 +41,7 @@ namespace templateExamen.ViewModels
 
         public static User ToUser(UserPostModel userModel)
         {
-            //UserRole rol = Models.UserRole.Regular;
-
-            //if (userModel.UserRole == "User_Manager")
-            //{
-            //    rol = Models.UserRole.User_Manager;
-            //}
-            //else if (userModel.UserRole == "Admin")
-            //{
-            //    rol = Models.UserRole.Admin;
-            //}
-
+         
             return new User
             {
                 FirstName = userModel.FirstName,
@@ -61,10 +50,6 @@ namespace templateExamen.ViewModels
                 Email = userModel.Email,
                 Password = ComputeSha256Hash(userModel.Password),
                 DateRegister = DateTime.Now,
-
-
-
-                //UserRole = rol
 
             };
         }

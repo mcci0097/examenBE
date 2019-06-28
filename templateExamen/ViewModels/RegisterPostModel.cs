@@ -16,6 +16,6 @@ namespace templateExamen.ViewModels
         [StringLength(150, MinimumLength = 6)]
         public string Password { get; set; }
         public DateTime DateRegister { get; set; }
-        //  public IEnumerable<HistoryUserRole> HistoryUserRoles { get; set; }
+       
     }
 }

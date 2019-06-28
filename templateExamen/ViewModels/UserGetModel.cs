@@ -22,7 +22,7 @@ namespace templateExamen.ViewModels
                 Id = user.Id,
                 Username = user.Username,
                 Email = user.Email,
-                UserRole = user.HistoryUserRole.First().UserRole.Name
+                UserRole = user.HistoryUserRole.FirstOrDefault().UserRole.Name
                 
             };
         }

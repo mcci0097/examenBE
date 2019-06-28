@@ -1,367 +1,341 @@
 ﻿using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
 using System;
 using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
+using templateExamen.Constants;
 using templateExamen.Models;
 using templateExamen.ViewModels;
 
 namespace templateExamen.Services
 {
-    public class UserService
+    public interface IUserService
     {
-        public interface IUserService
-        {
-            UserGetModel Authenticate(string username, string password);
-            UserGetModel Register(RegisterPostModel register);
-            User GetCurentUser(HttpContext httpContext);
-            IEnumerable<UserGetModel> GetAll();
+        UserGetModel Authenticate(string username, string password);
+        UserGetModel Register(RegisterPostModel register);
+        User GetCurentUser(HttpContext httpContext);
+        IEnumerable<UserGetModel> GetAll();
 
-            User Create(UserPostModel userModel);
-            UserGetModel Upsert(int id, UserPostModel userPostModel, User userLogat);
-            UserGetModel Delete(int id, User addedBy);
-            IEnumerable<HistoryUserRoleGetModel> GetAllHistory();
-            IEnumerable<HistoryUserRoleGetModel> GetHistoryById(int id);
+        User Create(UserPostModel userModel);
+        UserGetModel Upsert(int id, UserPostModel userPostModel, User userLogat);
+        UserGetModel Delete(int id, User addedBy);
+        IEnumerable<HistoryUserRoleGetModel> GetAllHistory();
+        IEnumerable<HistoryUserRoleGetModel> GetHistoryById(int id);
+        UserGetModel GetById(int id);
+    }
+
+    public class UserService : IUserService
+    {
+        private UsersDbContext context;
+
+        private readonly AppSettings appSettings;
+
+        public UserService(UsersDbContext context, IOptions<AppSettings> appSettings)
+        {
+            this.context = context;
+            this.appSettings = appSettings.Value;
         }
 
-        public class UserService : IUserService
+        public UserGetModel Authenticate(string username, string password)
         {
-            private TasksDbContext dbcontext;
+            var user = context
+                .Users
+                .Include(h => h.HistoryUserRole)
+                .ThenInclude(ur => ur.UserRole)
+                .SingleOrDefault(x => x.Username == username && x.Password == ComputeSha256Hash(password));
 
-            private readonly AppSettings appSettings;
+            // return null if user not found
+            if (user == null)
+                return null;
 
-            public UserService(TasksDbContext context, IOptions<AppSettings> appSettings)
+            // authentication successful so generate jwt token
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var key = Encoding.ASCII.GetBytes(appSettings.Secret);
+            var tokenDescriptor = new SecurityTokenDescriptor
             {
-                this.dbcontext = context;
-                this.appSettings = appSettings.Value;
-            }
-
-            public UserGetModel Authenticate(string username, string password)
-            {
-                var user = dbcontext
-                    .Users
-                    .Include(h => h.HistoryUserRole)
-                    .ThenInclude(ur => ur.UserRole)
-                    .SingleOrDefault(x => x.Username == username && x.Password == ComputeSha256Hash(password));
-
-                // return null if user not found
-                if (user == null)
-                    return null;
-
-                // authentication successful so generate jwt token
-                var tokenHandler = new JwtSecurityTokenHandler();
-                var key = Encoding.ASCII.GetBytes(appSettings.Secret);
-                var tokenDescriptor = new SecurityTokenDescriptor
+                Subject = new ClaimsIdentity(new Claim[]
                 {
-                    Subject = new ClaimsIdentity(new Claim[]
-                    {
                     new Claim(ClaimTypes.Name, user.Username.ToString()),
-                  //  new Claim(ClaimTypes.Role, user.UserRole.ToString()),
-                    new Claim (ClaimTypes.Role, getLatestHistoryUserRole(user.HistoryUserRole).UserRole.Title),
+                  // new Claim(ClaimTypes.Role, user.UserRole.ToString()),
+                    new Claim (ClaimTypes.Role, getLatestHistoryUserRole(user.HistoryUserRole).UserRole.Name),
                     new Claim(ClaimTypes.UserData, user.DateRegister.ToString())
 
-                    }),
-                    Expires = DateTime.UtcNow.AddDays(7),
-                    SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
-                };
-                var token = tokenHandler.CreateToken(tokenDescriptor);
-                var result = new UserGetModel
+                }),
+                Expires = DateTime.UtcNow.AddDays(7),
+                SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
+            };
+            var token = tokenHandler.CreateToken(tokenDescriptor);
+            var result = new UserGetModel
+            {
+                Id = user.Id,
+                Email = user.Email,
+                Username = user.Username,
+                Token = tokenHandler.WriteToken(token),
+                UserRole = user.HistoryUserRole.First().UserRole.Name
+
+
+            };
+
+
+            return result;
+        }
+
+        private string ComputeSha256Hash(string rawData)
+        {
+            // Create a SHA256   
+            // TODO: also use salt
+            using (SHA256 sha256Hash = SHA256.Create())
+            {
+                // ComputeHash - returns byte array  
+                byte[] bytes = sha256Hash.ComputeHash(Encoding.UTF8.GetBytes(rawData));
+
+                // Convert byte array to a string   
+                StringBuilder builder = new StringBuilder();
+                for (int i = 0; i < bytes.Length; i++)
                 {
-                    Id = user.Id,
-                    Email = user.Email,
-                    Username = user.Username,
-                    Token = tokenHandler.WriteToken(token),
-                    UserRole = user.HistoryUserRole.First().UserRole.Title
-
-
-                };
-
-
-                return result;
+                    builder.Append(bytes[i].ToString("x2"));
+                }
+                return builder.ToString();
+            }
+        }
+        public UserGetModel Register(RegisterPostModel register)
+        {
+            User existing = context
+                .Users
+                .FirstOrDefault(u => u.Username == register.Username);
+            if (existing != null)
+            {
+                return null;
             }
 
-            private string ComputeSha256Hash(string rawData)
+            User toAdd = new User
             {
-                // Create a SHA256   
-                // TODO: also use salt
-                using (SHA256 sha256Hash = SHA256.Create())
-                {
-                    // ComputeHash - returns byte array  
-                    byte[] bytes = sha256Hash.ComputeHash(Encoding.UTF8.GetBytes(rawData));
+                Email = register.Email,
+                LastName = register.LastName,
+                FirstName = register.FirstName,
+                Password = ComputeSha256Hash(register.Password),
+                Username = register.Username,
+                DateRegister = DateTime.Now,
+                HistoryUserRole = new List<HistoryUserRole>()
+            };
 
-                    // Convert byte array to a string   
-                    StringBuilder builder = new StringBuilder();
-                    for (int i = 0; i < bytes.Length; i++)
-                    {
-                        builder.Append(bytes[i].ToString("x2"));
-                    }
-                    return builder.ToString();
-                }
-            }
-            public UserGetModel Register(RegisterPostModel register)
+            context.Users.Add(toAdd);
+            context.SaveChanges();
+            context.Users.Attach(toAdd);
+            UserRole userRole = new UserRole
             {
-                User existing = dbcontext.Users.FirstOrDefault(u => u.Username == register.Username);
-                if (existing != null)
-                {
-                    return null;
-                }
+                Id = 1,
+                Name = RoleConstants.REGULAR,
+            };
 
-                User toAdd = new User
-                {
-                    Email = register.Email,
-                    LastName = register.LastName,
-                    FirstName = register.FirstName,
-                    Password = ComputeSha256Hash(register.Password),
-                    Username = register.Username,
-                    DateRegister = DateTime.Now,
-                    HistoryUserRole = new List<HistoryUserRole>()
-                };
+            //var defaultRole = dbcontext
+            //   .UserRoles
+            //   .AsNoTracking()
+            //   .FirstOrDefault(uRole => uRole.Title == RoleConstants.REGULAR);
 
-                dbcontext.Users.Add(toAdd);
-                dbcontext.SaveChanges();
-                dbcontext.Users.Attach(toAdd);
-                UserRole userRole = new UserRole
-                {
-                    Id = 1,
-                    Title = RoleConstants.REGULAR,
-                };
-
-                //var defaultRole = dbcontext
-                //   .UserRoles
-                //   .AsNoTracking()
-                //   .FirstOrDefault(uRole => uRole.Title == RoleConstants.REGULAR);
-
-                HistoryUserRole history = new HistoryUserRole
-                {
-                    User = toAdd,
-                    UserRole = userRole,
-                    StartTime = DateTime.Now,
-                    EndTime = null
-                };
-                List<HistoryUserRole> list = new List<HistoryUserRole>
+            HistoryUserRole history = new HistoryUserRole
+            {
+                User = toAdd,
+                UserRole = userRole,
+                StartTime = DateTime.Now,
+                EndTime = null
+            };
+            List<HistoryUserRole> list = new List<HistoryUserRole>
             {
                 history
             };
-                //dbcontext.HistoryUserRoles.Add(new HistoryUserRole
-                //{
-                //    User = toAdd,
-                //    UserRole = RoleConstants.REGULAR,
-                //    StartTime = DateTime.Now,
-                //    EndTime = null
+            //dbcontext.HistoryUserRoles.Add(new HistoryUserRole
+            //{
+            //    User = toAdd,
+            //    UserRole = RoleConstants.REGULAR,
+            //    StartTime = DateTime.Now,
+            //    EndTime = null
 
-                //});         
-                dbcontext.UserRoles.Add(userRole);
-                dbcontext.UserRoles.Attach(userRole);
-                toAdd.HistoryUserRole = list;
-                dbcontext.SaveChanges();
-                return Authenticate(register.Username, register.Password);
-            }
+            //});         
+            context.UserRoles.Add(userRole);
+            context.UserRoles.Attach(userRole);
+            toAdd.HistoryUserRole = list;
+            context.SaveChanges();
+            return Authenticate(register.Username, register.Password);
+        }
 
-            public User GetCurentUser(HttpContext httpContext)
+        public User GetCurentUser(HttpContext httpContext)
+        {
+            string username = httpContext.User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name).Value;
+            //string accountType = httpContext.User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.AuthenticationMethod).Value;
+            //return _context.Users.FirstOrDefault(u => u.Username == username && u.AccountType.ToString() == accountType);
+
+            return context
+                .Users
+                 .Include(u => u.HistoryUserRole)
+                 .ThenInclude(ur => ur.UserRole)
+                .FirstOrDefault(u => u.Username == username);
+        }
+
+
+        public IEnumerable<UserGetModel> GetAll()
+        {
+            // return users without passwords
+            return context.Users.Select(user => new UserGetModel
             {
-                string username = httpContext.User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Name).Value;
-                //string accountType = httpContext.User.Claims.FirstOrDefault(c => c.Type == ClaimTypes.AuthenticationMethod).Value;
-                //return _context.Users.FirstOrDefault(u => u.Username == username && u.AccountType.ToString() == accountType);
+                Id = user.Id,
+                Email = user.Email,
+                Username = user.Username,
+                UserRole = user.HistoryUserRole.FirstOrDefault().UserRole.Name,
+                Token = null
+            });
+        }
 
-                return dbcontext
-                    .Users
-                    .Include(u => u.HistoryUserRole)
-                    .ThenInclude(ur => ur.UserRole)
-                    .FirstOrDefault(u => u.Username == username);
-            }
-
-
-            public IEnumerable<UserGetModel> GetAll()
+        public UserGetModel GetById(int id)
+        {
+            User user = context.Users
+                .FirstOrDefault(u => u.Id == id);
+            if (user == null)
             {
-                // return users without passwords
-                return dbcontext.Users.Select(user => new UserGetModel
+                return null;
+            }
+            return UserGetModel.FromUser(user);
+        }
+
+        public IEnumerable<HistoryUserRoleGetModel> GetAllHistory()
+        {
+            return context
+                .HistoryUserRoles
+                .OrderBy(x => x.StartTime)
+                .Select(history => new HistoryUserRoleGetModel
                 {
-                    Id = user.Id,
-                    Email = user.Email,
-                    Username = user.Username,
-                    UserRole = user.HistoryUserRole.First().UserRole.Title,
-                    Token = null
+                    Username = history.User.Username,
+                    UserRoleName = history.UserRole.Name,
+                    StartTime = history.StartTime,
+                    EndTime = history.EndTime
                 });
-            }
+        }
 
-            public IEnumerable<HistoryUserRoleGetModel> GetAllHistory()
+        public IEnumerable<HistoryUserRoleGetModel> GetHistoryById(int id)
+        {
+            List<HistoryUserRole> histories = context.Users
+                .Include(x => x.HistoryUserRole)
+                .ThenInclude(x => x.UserRole)
+                .FirstOrDefault(u => u.Id == id).HistoryUserRole;
+            List<HistoryUserRoleGetModel> returnList = new List<HistoryUserRoleGetModel>();
+            foreach (HistoryUserRole history in histories)
             {
-                return dbcontext
-                    .HistoryUserRoles
-                    .OrderBy(x => x.StartTime)
-                    .Select(history => new HistoryUserRoleGetModel
-                    {
-                        Username = history.User.Username,
-                        UserRoleTitle = history.UserRole.Title,
-                        StartTime = history.StartTime,
-                        EndTime = history.EndTime
-                    });
+                returnList.Add(HistoryUserRoleGetModel.FromHistoryUserRole(history));
             }
+            var list = returnList.OrderBy(x => x.StartTime);
+            return list;
+        }
 
-            public IEnumerable<HistoryUserRoleGetModel> GetHistoryById(int id)
+        public User Create(UserPostModel userModel)
+        {
+            User toAdd = UserPostModel.ToUser(userModel);
+
+            context.Users.Add(toAdd);
+            context.SaveChanges();
+            context.Users.Attach(toAdd);
+
+            UserRole userRole = new UserRole
             {
-                List<HistoryUserRole> histories = dbcontext.Users
-                    .Include(x => x.HistoryUserRole)
-                    .ThenInclude(x => x.UserRole)
-                    .FirstOrDefault(u => u.Id == id).HistoryUserRole;
-                List<HistoryUserRoleGetModel> returnList = new List<HistoryUserRoleGetModel>();
-                foreach (HistoryUserRole history in histories)
-                {
-                    returnList.Add(HistoryUserRoleGetModel.FromHistoryUserRole(history));
-                }
-                var list = returnList.OrderBy(x => x.StartTime);
-                return list;
-            }
-
-            public User Create(UserPostModel userModel)
+                Id = 1,
+                Name = RoleConstants.REGULAR
+            };
+            HistoryUserRole history = new HistoryUserRole
             {
-                User toAdd = UserPostModel.ToUser(userModel);
-
-                dbcontext.Users.Add(toAdd);
-                dbcontext.SaveChanges();
-                dbcontext.Users.Attach(toAdd);
-
-                UserRole userRole = new UserRole
-                {
-                    Id = 1,
-                    Title = RoleConstants.REGULAR
-                };
-                HistoryUserRole history = new HistoryUserRole
-                {
-                    UserRole = userRole,
-                    StartTime = DateTime.Now
-                };
-                List<HistoryUserRole> list = new List<HistoryUserRole>
+                UserRole = userRole,
+                StartTime = DateTime.Now
+            };
+            List<HistoryUserRole> list = new List<HistoryUserRole>
             {
                 history
             };
 
-                dbcontext.UserRoles.Add(userRole);
-                dbcontext.UserRoles.Attach(userRole);
+            context.UserRoles.Add(userRole);
+            context.UserRoles.Attach(userRole);
 
-                toAdd.HistoryUserRole = list;
+            toAdd.HistoryUserRole = list;
 
-                dbcontext.SaveChanges();
+            context.SaveChanges();
 
-                //dbcontext.Users.Add(toAdd);
-                //dbcontext.SaveChanges();
-                return toAdd;
+            //dbcontext.Users.Add(toAdd);
+            //dbcontext.SaveChanges();
+            return toAdd;
 
 
 
+        }
+
+
+        public UserGetModel Upsert(int id, UserPostModel user, User userLogat)
+        {
+            var existing = context
+                .Users
+                .Include(x => x.HistoryUserRole)
+                .ThenInclude(x => x.UserRole)
+                .AsNoTracking().FirstOrDefault(u => u.Id == id);
+            if (existing == null)
+            {
+                return null;
+            }
+            if (existing.Username.Equals(userLogat.Username))
+            {
+                return null;
             }
 
+            string existingCurrentRole = getLatestHistoryUserRole(existing.HistoryUserRole).UserRole.Name;
+            string addedByCurrentRole = getLatestHistoryUserRole(userLogat.HistoryUserRole).UserRole.Name;
 
-            public UserGetModel Upsert(int id, UserPostModel user, User userLogat)
+              HistoryUserRole currentHistory = getLatestHistoryUserRole(existing.HistoryUserRole);
+
+            if (existing == null)
             {
-                var existing = dbcontext
-                    .Users
-                    .Include(x => x.HistoryUserRole)
-                    .ThenInclude(x => x.UserRole)
-                    .AsNoTracking().FirstOrDefault(u => u.Id == id);
-                if (existing == null)
+                //dbcontext.Users.(UserPostModel.ToUser(user));
+                //dbcontext.SaveChanges();
+                //return UserGetModel.FromUser(UserPostModel.ToUser(user));
+                User toReturn = Create(user);
+                return UserGetModel.FromUser(toReturn);
+            }
+
+            User toUpdate = UserPostModel.ToUser(user);
+
+            toUpdate.Password = existing.Password;
+            toUpdate.DateRegister = existing.DateRegister;
+            toUpdate.Id = id;
+            if (addedByCurrentRole.Equals(RoleConstants.MODERATOR))
+            {
+                //  https://www.aspforums.net/Threads/289493/Get-Number-of-months-between-two-dates-in-C/
+                var dateRegister = userLogat.DateRegister;
+                var dateCurrent = DateTime.Now;
+                int months = dateCurrent.Subtract(dateRegister).Days / 30;
+                //  toAdd.Id = id;
+
+                if (months >= 6)
                 {
-                    return null;
-                }
-                if (existing.Username.Equals(userLogat.Username))
-                {
-                    return null;
-                }
-
-                string existingCurrentRole = getLatestHistoryUserRole(existing.HistoryUserRole).UserRole.Title;
-                string addedByCurrentRole = getLatestHistoryUserRole(userLogat.HistoryUserRole).UserRole.Title;
-
-                HistoryUserRole currentHistory = getLatestHistoryUserRole(existing.HistoryUserRole);
-
-                if (existing == null)
-                {
-                    //dbcontext.Users.(UserPostModel.ToUser(user));
-                    //dbcontext.SaveChanges();
-                    //return UserGetModel.FromUser(UserPostModel.ToUser(user));
-                    User toReturn = Create(user);
-                    return UserGetModel.FromUser(toReturn);
-                }
-
-                User toUpdate = UserPostModel.ToUser(user);
-
-                toUpdate.Password = existing.Password;
-                toUpdate.DateRegister = existing.DateRegister;
-                toUpdate.Id = id;
-                if (addedByCurrentRole.Equals(RoleConstants.USER_MANAGER))
-                {
-                    //  https://www.aspforums.net/Threads/289493/Get-Number-of-months-between-two-dates-in-C/
-                    var dateRegister = userLogat.DateRegister;
-                    var dateCurrent = DateTime.Now;
-                    int months = dateCurrent.Subtract(dateRegister).Days / 30;
-                    //  toAdd.Id = id;
-
-                    if (months >= 6)
-                    {
-                        //dbcontext.Users.Update(toAdd);
-                        //dbcontext.SaveChanges();
-                        //return UserGetModel.FromUser(toAdd);
-                        toUpdate.HistoryUserRole = existing.HistoryUserRole;
-                        dbcontext.Users.Update(toUpdate);
-                        dbcontext.SaveChanges();
-                        dbcontext.Users.Attach(toUpdate);
-
-                        if (existingCurrentRole != user.UserRole)
-                        {
-
-                            IEnumerable<UserRole> allRoles = dbcontext.UserRoles;
-                            List<String> list = new List<string>();
-                            foreach (UserRole userRole in allRoles)
-                            {
-                                list.Add(userRole.Title);
-                            }
-                            if (list.Contains(user.UserRole))
-                            {
-                                UserRole userRole = searchForRoleByTitle(user.UserRole);
-                                HistoryUserRole history = new HistoryUserRole
-                                {
-                                    UserRole = userRole,
-                                    StartTime = DateTime.Now
-                                };
-                                currentHistory.EndTime = DateTime.Now;
-
-                                dbcontext.UserRoles.Attach(userRole);
-                                toUpdate.HistoryUserRole.Add(history);
-                                dbcontext.SaveChanges();
-                                return UserGetModel.FromUser(toUpdate);
-                            }
-                            return null;
-                        }
-                        return null;
-                        //  dbcontext.Users.Update(toAdd);
-                        //dbcontext.SaveChanges();
-                        //return toAdd;
-                    }
-                    return null;
-                }
-                if (addedByCurrentRole.Equals(RoleConstants.ADMIN))
-                {
-                    //toAdd.Id = id;
                     //dbcontext.Users.Update(toAdd);
                     //dbcontext.SaveChanges();
                     //return UserGetModel.FromUser(toAdd);
-
                     toUpdate.HistoryUserRole = existing.HistoryUserRole;
-                    dbcontext.Users.Update(toUpdate);
-                    dbcontext.SaveChanges();
-                    dbcontext.Users.Attach(toUpdate);
+                    context.Users.Update(toUpdate);
+                    context.SaveChanges();
+                    context.Users.Attach(toUpdate);
 
                     if (existingCurrentRole != user.UserRole)
                     {
 
-                        IEnumerable<UserRole> allRoles = dbcontext.UserRoles;
+                        IEnumerable<UserRole> allRoles = context.UserRoles;
                         List<String> list = new List<string>();
                         foreach (UserRole userRole in allRoles)
                         {
-                            list.Add(userRole.Title);
+                            list.Add(userRole.Name);
                         }
                         if (list.Contains(user.UserRole))
                         {
-
                             UserRole userRole = searchForRoleByTitle(user.UserRole);
                             HistoryUserRole history = new HistoryUserRole
                             {
@@ -370,97 +344,139 @@ namespace templateExamen.Services
                             };
                             currentHistory.EndTime = DateTime.Now;
 
-                            dbcontext.UserRoles.Attach(userRole);
+                            context.UserRoles.Attach(userRole);
                             toUpdate.HistoryUserRole.Add(history);
-                            dbcontext.SaveChanges();
+                            context.SaveChanges();
                             return UserGetModel.FromUser(toUpdate);
                         }
                         return null;
-                    }
-                    return null;
-                }
-                return null;
-            }
-            public UserGetModel Delete(int id, User addedBy)
-            {
-                var existing = dbcontext
-                    .Users
-                    .Include(x => x.HistoryUserRole)
-                    .ThenInclude(x => x.UserRole)
-                    .FirstOrDefault(u => u.Id == id);
-                string addedByCurrentRole = getLatestHistoryUserRole(addedBy.HistoryUserRole).UserRole.Title;
-                string existingCurrentRole = getLatestHistoryUserRole(existing.HistoryUserRole).UserRole.Title;
-                if (existing == null)
-                {
-                    return null;
-                }
-                if (addedByCurrentRole.Equals(RoleConstants.USER_MANAGER))
-                {
-                    //  https://www.aspforums.net/Threads/289493/Get-Number-of-months-between-two-dates-in-C/
-                    var dateRegister = addedBy.DateRegister;
-                    var dateCurrent = DateTime.Now;
-                    int months = dateCurrent.Subtract(dateRegister).Days / 30;
-
-
-                    if (months >= 6)
-                    {
-                        dbcontext.Comments.RemoveRange(dbcontext.Comments.Where(u => u.Owner.Id == existing.Id));
-                        dbcontext.SaveChanges();
-                        dbcontext.Tasks.RemoveRange(dbcontext.Tasks.Where(u => u.Owner.Id == existing.Id));
-                        dbcontext.SaveChanges();
-                        dbcontext.HistoryUserRoles.RemoveRange(dbcontext.HistoryUserRoles.Where(u => u.User.Id == existing.Id));
-                        dbcontext.SaveChanges();
-
-                        dbcontext.Users.Remove(existing);
-                        dbcontext.SaveChanges();
-                        return UserGetModel.FromUser(existing);
                     }
                     return null;
                     //  dbcontext.Users.Update(toAdd);
                     //dbcontext.SaveChanges();
                     //return toAdd;
                 }
-                if (addedByCurrentRole.Equals(RoleConstants.ADMIN))
-                {
-                    dbcontext.Comments.RemoveRange(dbcontext.Comments.Where(u => u.Owner.Id == existing.Id));
-                    dbcontext.SaveChanges();
-                    dbcontext.Tasks.RemoveRange(dbcontext.Tasks.Where(u => u.Owner.Id == existing.Id));
-                    dbcontext.SaveChanges();
-                    dbcontext.HistoryUserRoles.RemoveRange(dbcontext.HistoryUserRoles.Where(u => u.User.Id == existing.Id));
-                    dbcontext.SaveChanges();
+                return null;
+            }
+            if (addedByCurrentRole.Equals(RoleConstants.ADMIN))
+            {
+                //toAdd.Id = id;
+                //dbcontext.Users.Update(toAdd);
+                //dbcontext.SaveChanges();
+                //return UserGetModel.FromUser(toAdd);
 
-                    dbcontext.Users.Remove(existing);
-                    dbcontext.SaveChanges();
+                toUpdate.HistoryUserRole = existing.HistoryUserRole;
+                context.Users.Update(toUpdate);
+                context.SaveChanges();
+                context.Users.Attach(toUpdate);
+
+                if (existingCurrentRole != user.UserRole)
+                {
+
+                    IEnumerable<UserRole> allRoles = context.UserRoles;
+                    List<String> list = new List<string>();
+                    foreach (UserRole userRole in allRoles)
+                    {
+                        list.Add(userRole.Name);
+                    }
+                    if (list.Contains(user.UserRole))
+                    {
+
+                        UserRole userRole = searchForRoleByTitle(user.UserRole);
+                        HistoryUserRole history = new HistoryUserRole
+                        {
+                            UserRole = userRole,
+                            StartTime = DateTime.Now
+                        };
+                        currentHistory.EndTime = DateTime.Now;
+
+                        context.UserRoles.Attach(userRole);
+                        toUpdate.HistoryUserRole.Add(history);
+                        context.SaveChanges();
+                        return UserGetModel.FromUser(toUpdate);
+                    }
+                    return null;
+                }
+                return null;
+            }
+            return null;
+        }
+        public UserGetModel Delete(int id, User addedBy)
+        {
+            var existing = context
+                .Users
+                .Include(x => x.HistoryUserRole)
+                .ThenInclude(x => x.UserRole)
+                .FirstOrDefault(u => u.Id == id);
+            string addedByCurrentRole = getLatestHistoryUserRole(addedBy.HistoryUserRole).UserRole.Name;
+            string existingCurrentRole = getLatestHistoryUserRole(existing.HistoryUserRole).UserRole.Name;
+            if (existing == null)
+            {
+                return null;
+            }
+            if (addedByCurrentRole.Equals(RoleConstants.MODERATOR))
+            {
+                //  https://www.aspforums.net/Threads/289493/Get-Number-of-months-between-two-dates-in-C/
+                var dateRegister = addedBy.DateRegister;
+                var dateCurrent = DateTime.Now;
+                int months = dateCurrent.Subtract(dateRegister).Days / 30;
+
+
+                if (months >= 6)
+                {
+                    context.Users.RemoveRange(context.Users.Where(u => u.Id == existing.Id));
+                    context.SaveChanges();
+                    context.HistoryUserRoles.RemoveRange(context.HistoryUserRoles.Where(u => u.User.Id == existing.Id));
+                    context.SaveChanges();
+
+                    context.Users.Remove(existing);
+                  //  context.SaveChanges();
                     return UserGetModel.FromUser(existing);
                 }
                 return null;
+                //  dbcontext.Users.Update(toAdd);
+                //dbcontext.SaveChanges();
+                //return toAdd;
             }
-
-            private HistoryUserRole getLatestHistoryUserRole(IEnumerable<HistoryUserRole> allHistoryRole)
+            if (addedByCurrentRole.Equals(RoleConstants.ADMIN))
             {
-                var latestHistoryUserRole = allHistoryRole.OrderByDescending(x => x.StartTime).FirstOrDefault();
-                if (latestHistoryUserRole.EndTime == null)
-                {
-                    return latestHistoryUserRole;
-                }
-                return null;
+
+                context.Users.RemoveRange(context.Users.Where(u => u.Id == existing.Id));
+                context.SaveChanges();
+                context.HistoryUserRoles.RemoveRange(context.HistoryUserRoles.Where(u => u.User.Id == existing.Id));
+                context.SaveChanges();
+
+                context.Users.Remove(existing);
+                //context.SaveChanges();
+                return UserGetModel.FromUser(existing);
             }
-
-
-            private UserRole searchForRoleByTitle(string title)
-            {
-                IEnumerable<UserRole> roles = dbcontext.UserRoles;
-                foreach (UserRole userRole in roles)
-                {
-                    if (userRole.Title.Equals(title))
-                    {
-                        return userRole;
-                    }
-                }
-                return null;
-            }
-
-
+            return null;
         }
+
+        private HistoryUserRole getLatestHistoryUserRole(IEnumerable<HistoryUserRole> allHistoryRole)
+        {
+            var latestHistoryUserRole = allHistoryRole.OrderByDescending(x => x.StartTime).FirstOrDefault();
+            if (latestHistoryUserRole.EndTime == null)
+            {
+                return latestHistoryUserRole;
+            }
+            return null;
+        }
+
+
+        private UserRole searchForRoleByTitle(string title)
+        {
+            IEnumerable<UserRole> roles = context.UserRoles;
+            foreach (UserRole userRole in roles)
+            {
+                if (userRole.Name.Equals(title))
+                {
+                    return userRole;
+                }
+            }
+            return null;
+        }
+
+
     }
 }

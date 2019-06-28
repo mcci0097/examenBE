@@ -7,7 +7,7 @@ using templateExamen.Models;
 
 namespace templateExamen.Models
 {
-    public class UserRoleDbSeeder
+    public class UserRolesDbSeeder
     {
 
         public static void Initialize(UsersDbContext context)

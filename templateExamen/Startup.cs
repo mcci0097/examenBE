@@ -99,6 +99,7 @@ namespace templateExamen
 
             //Dependency injection
             services.AddScoped<IUserService, UserService>();
+            services.AddScoped<IPacketService, PacketService>();
 
         }
 

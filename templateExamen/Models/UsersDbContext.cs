@@ -31,6 +31,8 @@ namespace templateExamen.Models
         public DbSet<UserRole> UserRoles { get; set; }
 
         public DbSet<HistoryUserRole> HistoryUserRoles { get; set; }
+
+        public DbSet<Packet> Packets { get; set; }
     }
   }
 
